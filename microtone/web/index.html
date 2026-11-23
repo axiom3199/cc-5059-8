@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>微分音音乐编配试听界面</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>微分音音乐编配试听界面</h1>
+  <p class="sub">参考频率 / 周期比 / 音阶重复规则独立保存 · 频率由后端按调律实时计算 · 不量化回十二半音</p>
+</header>
+
+<main>
+<section class="panel" id="panel-tuning">
+  <h2>① 调律编辑</h2>
+  <div class="row">
+    <label>预置体系
+      <select id="tuning-select"></select>
+    </label>
+    <label>续接策略
+      <select id="policy-select">
+        <option value="hold_ratio">hold_ratio（保持音程比，频率随新表移动）</option>
+        <option value="hold_freq">hold_freq（固定物理频率，音程比改变）</option>
+      </select>
+    </label>
+    <button id="apply-policy">应用策略</button>
+  </div>
+
+  <div class="grid2">
+    <label>体系名称 <input id="t-name" type="text"></label>
+    <label>参考频率 Hz <input id="t-ref" type="number" step="0.0001"></label>
+    <label>参考级下标 <input id="t-refdeg" type="number" min="0"></label>
+    <label>每周期级数 <input id="t-steps" type="number" min="1"></label>
+    <label>周期比（如 2/1、3/1） <input id="t-period" type="text"></label>
+    <label>另存为 <input id="t-saveas" type="text" placeholder="custom-1"></label>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <h3>音阶比例（相对周期起点，支持 3/2、1.25、701.955c）</h3>
+      <div id="scale-editor"></div>
+    </div>
+    <div>
+      <h3>音名标签（仅显示用，不参与发声）</h3>
+      <div id="label-editor"></div>
+    </div>
+  </div>
+  <div class="row">
+    <button id="save-tuning" class="primary">保存调律并应用（已发声音按策略续接）</button>
+    <button id="reload-tuning">放弃修改，重新载入</button>
+  </div>
+  <div id="continuation" class="report hidden"></div>
+</section>
+
+<section class="panel" id="panel-keys">
+  <h2>② 琴键触发（点击发声，频率来自当前调律真实映射）</h2>
+  <div class="row">
+    <label>显示级数范围
+      <input id="key-lo" type="number" value="-7" style="width:5em">
+      到
+      <input id="key-hi" type="number" value="12" style="width:5em">
+    </label>
+    <button id="build-keys">生成琴键</button>
+    <label>滑音目标级 <input id="gliss-target" type="number" value="4" style="width:5em"></label>
+    <label>滑音时长 s <input id="gliss-dur" type="number" value="0.8" step="0.1" style="width:5em"></label>
+  </div>
+  <div id="keyboard" class="keyboard"></div>
+  <div id="key-log" class="report"></div>
+</section>
+
+<section class="panel" id="panel-score">
+  <h2>③ 谱面事件（音阶级数描述旋律与和声）</h2>
+  <div class="row">
+    <label>示例
+      <select id="score-select">
+        <option value="">— 选择内置示例 —</option>
+      </select>
+    </label>
+    <button id="render-score" class="primary">渲染并信号分析</button>
+    <button id="export-wav">导出 WAV</button>
+    <label>对比调律 B
+      <select id="tuning-b"></select>
+    </label>
+    <button id="render-compare">A/B 调律对比</button>
+  </div>
+  <textarea id="score-text" rows="10" spellcheck="false"></textarea>
+</section>
+
+<section class="panel" id="panel-result">
+  <h2>④ 结果区：音高映射与实际音程（含信号实测主频）</h2>
+  <div id="result"></div>
+</section>
+</main>
+
+<footer>
+  纯标准库实现 · 简单加法合成音色（基波+谐波）· 所有“实测主频”由后端对渲染 PCM 做 DFT/Goertzel 估计
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+bpm 120
+tuning 24-TET
+policy hold_freq
+# 四分音旋律：包含 12-TET 不存在的中间级（奇数级）
+note 0 0.75
+note 1 0.75
+note 2 0.75
+note 3 0.75
+note 4 0.75
+rest 0.25
+# 微分音和声：0 与 1 相差 50 音分，产生缓慢拍频
+chord 0,1 3.0
+rest 0.5
+# 跨越微分音级的滑音（24 个微音级，每级 50 音分）
+gliss 0 6 3.0 steps 24
+rest 0.5
+note 12 1.5

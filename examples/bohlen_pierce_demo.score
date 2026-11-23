@@ -1,0 +1,14 @@
+bpm 110
+tuning bohlen-pierce
+policy hold_ratio
+# Bohlen-Pierce：3:1 周期、13 级，完全不是八度/十二音体系
+note 0 1.0
+note 2 1.0
+note 4 1.0
+note 6 1.0
+rest 0.5
+# BP 特色“大三和弦”比例 3:5:7 近似（级数 0,4,10 附近）
+chord 0,4,10 3.0
+rest 0.5
+gliss 0 13 3.0 steps 26
+note 13 1.5
