@@ -1,0 +1,12 @@
+bpm 120
+# 旧弯音谱面：演示同时起音的两个音争用弯音通道、释放占用与待处理补发。
+# 对应旧资料 channel_count=4，release 由迁移器按合成器回报建模。
+legacy-chord 60,61 2.0
+legacy-rest 0.25
+# 前一和弦尾音未完全结束时新音到达：若通道仍在释放，须改派或保留待处理
+legacy-note 62 1.0
+legacy-note 63 1.0
+legacy-rest 0.5
+legacy-chord 60,64 1.5
+legacy-rest 0.5
+legacy-note 72 1.0

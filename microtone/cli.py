@@ -8,6 +8,8 @@
   python3 cli.py compare <score文件> --a 12-TET --b 19-TET --out output/ab.wav
   python3 cli.py verify <score文件> --tuning just
   python3 cli.py export-tunings <目录>
+  python3 cli.py migrate <旧调律.json> <旧谱面.score> <净输出目录>
+  python3 cli.py check-lock <迁移输出目录>
 """
 
 from __future__ import annotations
@@ -29,6 +31,16 @@ from microtone.core import (
     compare_tuning_mappings,
     chord_ratios,
     TuningSystem,
+)
+from microtone.migration import (
+    load_legacy_tuning,
+    parse_legacy_score,
+    migrate_tuning,
+    FORMAT_VERSION,
+    write_format_lock,
+    assert_lock_current,
+    ensure_clean_output_dir,
+    migration_header,
 )
 
 
@@ -132,6 +144,80 @@ def cmd_export(args):
         print("写出", path)
 
 
+def cmd_migrate(args):
+    """旧弯音资料 + 旧谱面 -> 净目录中的显式比值新格式（含锁与证据）。"""
+    legacy = load_legacy_tuning(args.legacy_tuning)
+    score = parse_legacy_score(open(args.legacy_score, encoding="utf-8").read())
+    manifest = migrate_tuning(
+        legacy, score, release_seconds=args.release,
+        sample_rate=args.sample_rate)
+
+    # 净目录约束：不允许在含手改/陈旧资料的目录里落迁移产物
+    ensure_clean_output_dir(args.outdir)
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_"
+                        for c in legacy.name) or "migrated"
+    tuning_path = os.path.join(args.outdir, f"{safe_name}.tuning.json")
+    score_path = os.path.join(args.outdir, f"{safe_name}.score")
+    manifest_path = os.path.join(args.outdir, f"{safe_name}.manifest.json")
+    lock_path = write_format_lock(args.outdir)
+
+    tuning_doc = {**migration_header(), **manifest.tuning}
+    with open(tuning_path, "w", encoding="utf-8") as f:
+        json.dump(tuning_doc, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    with open(score_path, "w", encoding="utf-8") as f:
+        f.write(manifest.migrated_score_text)
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest.to_dict(), f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+    print(f"迁移格式版本: {FORMAT_VERSION}")
+    print(f"输出目录（净目录）: {args.outdir}")
+    print("  锁文件:", lock_path)
+    print("  新调律:", tuning_path)
+    print("  新谱面:", score_path)
+    print("  迁移证据清单:", manifest_path)
+    print("\n逐音迁移（旧级 -> 新级数 / 旧目标频率 / 新映射频率 / 通道）:")
+    for n in manifest.notes:
+        flag = "不可表达" if not n.representable_on_legacy else (
+            "pending" if n.held_pending else f"ch{n.channel}")
+        print(f"  L{n.legacy_midi_note:<3} -> deg{n.new_degree:<3} "
+              f"{n.legacy_target_hz:10.4f}Hz -> {n.new_mapped_hz:10.4f}Hz "
+              f"比例 {n.ratio_vs_ref:<10} [{flag}] {n.note}")
+    if manifest.unrepresentable:
+        print("\n旧通道无法表达的具体音（新映射仍保留其真实频率）:")
+        for u in manifest.unrepresentable:
+            print(f"  L{u.legacy_midi_note} 偏移 {u.offset_cents:+.2f}c "
+                  f"超出 ±{u.bend_range_cents:.0f}c，"
+                  f"目标 {u.target_freq_hz:.4f}Hz")
+    for w in manifest.warnings:
+        print("  警告:", w)
+    print("\n切换策略对比:")
+    print(" ", manifest.strategy_comparison["explanation"])
+    for r in manifest.strategy_comparison["hold_ratio"]:
+        print(f"  hold_ratio  L{r['legacy_midi_note']} "
+              f"{r['old_freq_hz']:.4f} -> {r['new_freq_hz']:.4f}Hz "
+              f"({r['delta_cents']:+.4f}c)")
+    print("\n逐音独听信号核对:")
+    for v in manifest.verification:
+        flag = "OK  " if v["pass"] else "FAIL"
+        print(f"  [{flag}] L{v['legacy_midi_note']}->deg{v['new_degree']} "
+              f"旧目标={v['legacy_target_hz']:.4f} "
+              f"新映射={v['new_mapped_hz']:.4f} "
+              f"实测={v['measured_hz']:.4f}Hz")
+    print("\n频率契约:", "通过" if manifest.frequency_contract_ok else "失败")
+    if not manifest.frequency_contract_ok:
+        raise SystemExit(1)
+
+
+def cmd_check_lock(args):
+    """核对迁移目录的构建锁是否与当前代码契约一致。"""
+    lock = assert_lock_current(args.dir)
+    print("锁文件与当前代码一致:")
+    for k, v in lock.items():
+        print(f"  {k}: {v}")
+
+
 def main():
     p = argparse.ArgumentParser(description="微分音调律 CLI（辅助，主入口为图形界面）")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -165,6 +251,22 @@ def main():
     pe = sub.add_parser("export-tunings")
     pe.add_argument("dir")
     pe.set_defaults(func=cmd_export)
+
+    pm = sub.add_parser(
+        "migrate",
+        help="把旧弯音调律资料与旧谱面迁移为显式比值新格式（辅助入口）")
+    pm.add_argument("legacy_tuning", help="旧调律 JSON（legacy-bend/1）")
+    pm.add_argument("legacy_score", help="旧谱面（legacy-note/legacy-chord）")
+    pm.add_argument("outdir", help="迁移输出目录，必须不存在或为空（净目录）")
+    pm.add_argument("--release", type=float, default=0.12,
+                    help="合成器释放尾音秒数（通道释放占用建模）")
+    pm.add_argument("--sample-rate", type=int, default=22050)
+    pm.set_defaults(func=cmd_migrate)
+
+    pl = sub.add_parser("check-lock",
+                        help="核对迁移目录的调律格式构建锁")
+    pl.add_argument("dir")
+    pl.set_defaults(func=cmd_check_lock)
 
     args = p.parse_args()
     args.func(args)

@@ -34,7 +34,7 @@ python3 -I microtone/web/server.py          # 默认 http://localhost:8000
 python3 -I microtone/web/server.py 8124     # 自定义端口
 ```
 
-浏览器打开 `http://localhost:8000`，界面分四区：
+浏览器打开 `http://localhost:8000`，界面分五区：
 
 1. **调律编辑**：选择 7 个预置体系（12/19/24-TET、纯律、五度相生、中庸全音、
    Bohlen-Pierce），或直接编辑参考频率、周期比、每周期级数、各级比例
@@ -43,7 +43,13 @@ python3 -I microtone/web/server.py 8124     # 自定义端口
 2. **琴键触发**：按当前调律真实映射生成琴键，键面直接标注频率与精确比例；
    点击发声，另有滑音按钮（对数频率轴连续滑动，不经半音量化）。
 3. **谱面事件**：内置四个示例，可编辑后渲染、导出 WAV、做 A/B 调律对比。
-4. **结果区**：每个事件的映射频率、精确比例、**从输出信号实测的主频**、
+4. **调律资料迁移**：粘贴旧弯音偏移资料（`legacy-bend/1`：参考频率、弯音范围、
+   通道数、音分偏移）与旧谱面，一键迁移为显式比值新格式（`explicit-ratio/2`）。
+   后端按真实频率与通道事件运算，展示逐音新旧频率契约、每音独听的信号实测核对、
+   实际通道事件时间线（含释放占用与待处理补发）、无法用旧通道表达的具体音，以及
+   “按原音程比保留持续音(hold_freq)”与“安全换气点切换”的对比；迁移后的调律自动
+   注册到第 1 区、迁移谱面填入第 3 区，琴键与渲染都走新映射发声。异常由本界面提示。
+5. **结果区**：每个事件的映射频率、精确比例、**从输出信号实测的主频**、
    误差音分与核对结论；和弦区给出整数比与拍频；超范围事件单独警告。
 
 ### 入口 2：tkinter 桌面图形界面（可选）
@@ -68,8 +74,41 @@ python3 -I microtone/cli.py compare examples/compare_common.score \
 python3 -I microtone/cli.py verify examples/quarter_tone_demo.score \
         --tuning 24-TET                                 # 信号分析核对
 python3 -I microtone/cli.py export-tunings examples/tunings  # 导出可调 JSON
+# 调律资料迁移（图形界面为主入口，CLI 仅辅助；输出目录必须是净目录）
+python3 -I microtone/cli.py migrate \
+        examples/legacy/quarter_tone_bend.legacy.json \
+        examples/legacy/quarter_tone_bend.legacy.score /tmp/mig_out
+python3 -I microtone/cli.py check-lock /tmp/mig_out    # 核对构建锁
 python3 -I examples/demo_verify.py                     # 端到端演示
+python3 -I examples/demo_migration.py                  # 迁移端到端演示
 ```
+
+## 调律资料迁移（旧弯音 → 显式比值）
+
+旧格式 `legacy-bend/1` 在十二平均律半音上叠加固定音分偏移，并受音源弯音通道
+约束：每通道一条弯音、通道数固定、偏移超出弯音范围即无法发声。迁移到新格式
+`explicit-ratio/2` 后，每个旧基底级成为一个独立级数，比例按旧资料的**真实目标
+频率**反算为精确 `Fraction`，发声只走 `TuningSystem.degree_to_freq()`，旧弯音
+仅用于迁移期的通道模拟，不参与新格式发声。迁移语义保证：
+
+- **通道争用**：同时起音的两个音即使起音相同，也不共用后续弯音；空闲通道不足时
+  改派或保留为待处理（pending），待通道释放结束的精确时刻补发，绝不把待处理音
+  改写成共享弯音下的错误频率。
+- **释放占用**：合成器回报通道进入释放（默认 0.12s 尾音）后，通道在释放结束前
+  不可复用，时间线显式记录 `note_off / release_done / note_on(补发)`。
+- **无法表达的和弦**：超出弯音范围的具体音逐音标记，可表达部分的真实频率完整
+  保留；不可表达音在新映射中仍按真实频率发声。
+- **非十二等分含义**：音分偏移以比值永久保留（如四分音 +150c 不是整数半音），
+  无法用旧通道表达的偏移都会在清单中报告。
+- **两种切换策略对比**：`hold_freq`（按原音程比保留持续音，物理频率不动）与
+  “安全换气点切换”（推迟到无在发音的时刻整体切到新调律），逐音给出 ΔHz/Δ音分。
+- **核对闭环**：每个迁移音做单音独听渲染并从 PCM 实测主频，同时核对旧目标频率与
+  新映射频率；全部证据写入迁移清单，格式转换不允许伪报。
+- **构建锁定与净目录**：迁移输出目录必须不存在或为空，并写入
+  `tuning-format.lock.json`；运行时核对锁与代码常量，版本不符或被手改即拒绝。
+  迁移产物头部注明新旧格式版本。
+
+旧资料示例见 `examples/legacy/`（四分音弯音、窄弯音含不可表达音两套）。
 
 ## 谱面 DSL
 
@@ -88,13 +127,20 @@ rest 0.5               # 休止
 ## 验证
 
 ```bash
-python3 -I tests/test_core.py
+python3 -I tests/test_core.py        # 核心 22 项
+python3 -I tests/test_migration.py   # 迁移 22 项
 ```
 
-22 个测试覆盖：N 平均律比例、负级数与跨周期、纯律/平均律大三度 13.7 音分差、
+核心 22 个测试覆盖：N 平均律比例、负级数与跨周期、纯律/平均律大三度 13.7 音分差、
 Bohlen-Pierce 非八度周期、参考频率独立性、JSON 往返、复音逐音实测核对、
 滑音端点与对数连续性、WAV 头、超范围静音、两种续接策略的真实冲突、
 调律对比与四分音拍频。
+
+迁移 22 个测试覆盖：旧音分偏移的真实频率、弯音范围可表达性、同起音不共用弯音、
+释放通道不复用、待处理音在释放结束时刻补发、补发前结束的撤销、不可表达音标记、
+非十二等分偏移以比值保留、新旧频率契约与信号实测、不可表达和弦逐音标记且保留
+可表达部分、两种切换策略冲突、安全换气点、净目录与构建锁（含被篡改拒绝）、
+两套旧样例运行到底。
 
 ## 目录结构
 
@@ -104,10 +150,18 @@ microtone/
   core/score.py      谱面事件与 DSL 解析
   core/renderer.py   PCM 合成、滑音、VoiceManager 续接策略、WAV 导出
   core/analysis.py   DFT/Goertzel 主频估计、和弦比、拍频、渲染核对
-  web/               零依赖 Web 图形入口（http.server + 原生 JS）
+  migration/         旧弯音资料 -> 显式比值新格式的迁移器
+    legacy.py        旧格式模型（参考频率/弯音范围/通道数/音分偏移）与旧 DSL
+    channels.py      时间驱动的弯音通道分配（释放占用、待处理补发）
+    migrator.py      新格式构建、频率契约、策略对比、逐音独听核对
+    lock.py          格式版本构建锁与净目录约束
+  web/               零依赖 Web 图形入口（http.server + 原生 JS，含迁移面板）
   gui/tk_app.py      可选 tkinter 图形入口
-  cli.py             命令行辅助
-examples/            谱面样例、调律 JSON、端到端演示
-tests/test_core.py   22 项测试
+  cli.py             命令行辅助（含 migrate / check-lock）
+examples/
+  legacy/            旧弯音调律 JSON 与旧谱面样例
+  demo_migration.py  迁移端到端演示
+tests/test_core.py       22 项核心测试
+tests/test_migration.py  22 项迁移测试
 output/              渲染产物（WAV）
 ```

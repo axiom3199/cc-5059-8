@@ -47,6 +47,22 @@ main {
 }
 
 #panel-result { grid-column: 1 / -1; }
+#panel-migrate { grid-column: 1 / -1; }
+#migration-result { max-height: 520px; }
+.timeline {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #10141a;
+}
+#migration-result pre {
+  background: #10141a;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
 
 .row {
   display: flex;

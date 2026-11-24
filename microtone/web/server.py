@@ -29,6 +29,12 @@ from microtone.core import (
     chord_ratios,
     compare_tuning_mappings,
 )
+from microtone.migration import (
+    LegacyTuning,
+    parse_legacy_score,
+    migrate_tuning,
+    FORMAT_VERSION,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SR = 44100
@@ -141,6 +147,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._render_score()
             if path == "/api/verify":
                 return self._verify()
+            if path == "/api/migrate-legacy":
+                return self._migrate_legacy()
             self.send_error(404)
         except Exception as exc:  # 任何后端错误回传，而不是静默
             _json(self, {"error": f"{type(exc).__name__}: {exc}"}, 500)
@@ -256,6 +264,27 @@ class Handler(BaseHTTPRequestHandler):
         result = render_score(score, tuning, sample_rate=SR)
         _json(self, {"checks": verify_render(result),
                      "out_of_range": result["out_of_range"]})
+
+    # ---- 调律资料迁移（旧弯音 -> 显式比值新格式） ------------------------
+
+    def _migrate_legacy(self):
+        data = _read_json(self)
+        # 旧资料与旧谱面均来自请求体，后端按真实运算迁移，不接受手改频率
+        legacy = LegacyTuning.from_dict(data["legacy_tuning"])
+        legacy_score = parse_legacy_score(data["legacy_score_text"])
+        release = float(data.get("release_seconds", 0.12))
+        manifest = migrate_tuning(
+            legacy, legacy_score, release_seconds=release,
+            sample_rate=SR)
+
+        # 迁移产物注册为可调可弹的新调律：琴键与渲染都走新映射发声
+        save_name = f"migrated::{legacy.name}"
+        new_tuning = TuningSystem.from_dict(manifest.tuning)
+        STATE.systems[save_name] = new_tuning
+        payload = manifest.to_dict()
+        payload["registered_name"] = save_name
+        payload["format_version_locked"] = FORMAT_VERSION
+        _json(self, payload)
 
     def _export_wav(self, q):
         # GET /api/export-wav?name=...&tuning=...

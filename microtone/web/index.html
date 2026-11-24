@@ -88,8 +88,33 @@
   <textarea id="score-text" rows="10" spellcheck="false"></textarea>
 </section>
 
+<section class="panel" id="panel-migrate">
+  <h2>④ 调律资料迁移：旧弯音偏移 → 显式比值新格式（微分音新实现）</h2>
+  <p class="sub">粘贴旧弯音调律 JSON 与旧谱面；后端按真实频率与通道事件迁移，
+    新调律自动注册到上方选择器，琴键与渲染都走新映射发声。</p>
+  <div class="grid2">
+    <div>
+      <h3>旧调律资料（legacy-bend/1：参考频率、弯音范围、通道数、音分偏移）</h3>
+      <textarea id="legacy-tuning" rows="12" spellcheck="false"></textarea>
+    </div>
+    <div>
+      <h3>旧谱面（legacy-note / legacy-chord / legacy-rest）</h3>
+      <textarea id="legacy-score" rows="12" spellcheck="false"></textarea>
+    </div>
+  </div>
+  <div class="row">
+    <label>释放尾音 s <input id="migrate-release" type="number"
+      value="0.12" step="0.01" style="width:6em"></label>
+    <button id="run-migrate" class="primary">执行迁移并核对</button>
+    <button id="load-legacy-sample">载入旧弯音示例</button>
+    <button id="load-narrow-sample">载入窄弯音（含不可表达音）示例</button>
+  </div>
+  <div id="migration-error" class="warn hidden"></div>
+  <div id="migration-result" class="report hidden"></div>
+</section>
+
 <section class="panel" id="panel-result">
-  <h2>④ 结果区：音高映射与实际音程（含信号实测主频）</h2>
+  <h2>⑤ 结果区：音高映射与实际音程（含信号实测主频）</h2>
   <div id="result"></div>
 </section>
 </main>

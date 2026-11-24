@@ -358,6 +358,179 @@ async function exportWav() {
   logKey(`已请求导出 WAV（调律 ${tuning}）`);
 }
 
+// ---- 调律资料迁移（旧弯音 -> 显式比值，全程调用后端新实现） ---------------
+
+const LEGACY_SAMPLES = {
+  quarter: {
+    tuning: `{
+  "format_version": "legacy-bend/1",
+  "name": "旧四分音弯音律（24TET 偏移）",
+  "ref_freq": 261.625565,
+  "ref_midi_note": 60,
+  "bend_range_cents": 200.0,
+  "channel_count": 4,
+  "offsets_cents": {
+    "60": 0.0, "61": 50.0, "62": 0.0, "63": 50.0,
+    "64": 0.0, "65": 50.0, "66": 0.0, "67": 50.0,
+    "68": 0.0, "69": 50.0, "70": 0.0, "71": 50.0, "72": 0.0
+  }
+}`,
+    score: `bpm 120
+legacy-chord 60,61 2.0
+legacy-rest 0.25
+legacy-note 62 1.0
+legacy-note 63 1.0
+legacy-rest 0.5
+legacy-chord 60,64 1.5
+legacy-rest 0.5
+legacy-note 72 1.0
+`,
+  },
+  narrow: {
+    tuning: `{
+  "format_version": "legacy-bend/1",
+  "name": "旧纯律偏移表（窄弯音硬件）",
+  "ref_freq": 261.625565,
+  "ref_midi_note": 60,
+  "bend_range_cents": 100.0,
+  "channel_count": 2,
+  "offsets_cents": {
+    "60": 0.0, "62": -13.686, "64": 1.955, "65": -15.641,
+    "67": 3.91, "69": -17.594, "71": -11.731, "72": 0.0, "76": 150.0
+  }
+}`,
+    score: `bpm 100
+legacy-chord 60,64 2.0
+legacy-rest 0.5
+legacy-note 62 1.0
+legacy-rest 0.5
+legacy-chord 60,67,76 1.5
+`,
+  },
+};
+
+function showMigrationError(msg) {
+  const box = $("migration-error");
+  box.classList.remove("hidden");
+  box.textContent = `迁移被拒绝：${msg}`;
+}
+
+function showMigrationResult(data) {
+  $("migration-error").classList.add("hidden");
+  const box = $("migration-result");
+  box.classList.remove("hidden");
+
+  const noteRows = data.notes.map((n) => {
+    const tag = !n.representable_on_legacy ? "旧通道不可表达"
+      : (n.held_pending ? "曾 pending" : `ch${n.channel}`);
+    return `<tr><td>L${n.legacy_midi_note}</td><td>${n.new_degree}</td>` +
+      `<td>${n.label}</td><td>${n.legacy_target_hz.toFixed(4)}</td>` +
+      `<td>${n.new_mapped_hz.toFixed(4)}</td><td>${n.ratio_vs_ref}</td>` +
+      `<td>${n.offset_cents.toFixed(2)}c</td><td>${tag}</td>` +
+      `<td>${n.note}</td></tr>`;
+  }).join("");
+
+  const checks = data.verification.map((v) => {
+    const flag = v.pass ? "OK" : "FAIL";
+    return `<tr class="${flag === "FAIL" ? "fail" : "pass"}">` +
+      `<td>L${v.legacy_midi_note}→deg${v.new_degree}</td>` +
+      `<td>${v.legacy_target_hz.toFixed(4)}</td>` +
+      `<td>${v.new_mapped_hz.toFixed(4)}</td>` +
+      `<td>${v.measured_hz.toFixed(4)}</td>` +
+      `<td>${v.error_vs_legacy_cents.toFixed(3)}c</td>` +
+      `<td>${v.error_vs_new_cents.toFixed(3)}c</td><td>${flag}</td></tr>`;
+  }).join("");
+
+  const timeline = data.channel_timeline.map((e) =>
+    `<div>t=${e.time.toFixed(3)}s <b>${e.kind}</b> 通道${e.channel} ` +
+    `音${e.midi_note ?? "—"} 弯音${e.bend_cents.toFixed(2)}c ` +
+    `${e.target_freq_hz ? e.target_freq_hz.toFixed(2) + "Hz" : ""} ` +
+    `${e.detail}</div>`).join("");
+
+  const bad = data.unrepresentable.map((u) =>
+    `<div>L${u.legacy_midi_note}：偏移 ${u.offset_cents.toFixed(2)}c 超出 ` +
+    `±${u.bend_range_cents.toFixed(0)}c，真实目标 ${u.target_freq_hz.toFixed(3)}Hz ` +
+    `已由新映射保留（${u.reason}）</div>`).join("");
+
+  const warnings = data.warnings.map((w) => `<div>${w}</div>`).join("");
+
+  const cmp = data.strategy_comparison;
+  const cmpRows = cmp.hold_ratio.map((r, i) => {
+    const hf = cmp.hold_freq[i];
+    const ss = cmp.safe_switch[i];
+    return `<tr><td>L${r.legacy_midi_note}</td>` +
+      `<td>${hf.old_freq_hz.toFixed(3)} → ${hf.new_freq_hz.toFixed(3)} ` +
+      `(Δ${hf.delta_cents.toFixed(2)}c)</td>` +
+      `<td>${r.old_freq_hz.toFixed(3)} → ${r.new_freq_hz.toFixed(3)} ` +
+      `(Δ${r.delta_cents.toFixed(2)}c)</td>` +
+      `<td>${ss.old_freq_hz.toFixed(3)} → ${ss.new_freq_hz.toFixed(3)} ` +
+      `(Δ${ss.delta_cents.toFixed(2)}c)</td></tr>`;
+  }).join("");
+  const safePts = cmp.safe_points.map((p) =>
+    `t=${p.time.toFixed(3)}s（${p.reason}）`).join("；");
+
+  box.innerHTML =
+    `<h3>迁移格式版本 ${data.format_version}（旧 ${data.legacy_format_version}）` +
+    `· 频率契约 <b>${data.frequency_contract_ok ? "通过" : "失败"}</b>` +
+    ` · 已注册为调律 <b>${data.registered_name}</b></h3>` +
+    (bad ? `<div class="warn"><h3>旧通道无法表达的具体音</h3>${bad}</div>` : "") +
+    (warnings ? `<div class="warn"><h3>和弦标记</h3>${warnings}</div>` : "") +
+    `<h3>逐音迁移：旧级 → 新级数 / 真实频率 / 比值 / 通道事件</h3>` +
+    `<table><thead><tr><th>旧级</th><th>新级数</th><th>标签</th>` +
+    `<th>旧目标Hz</th><th>新映射Hz</th><th>精确比例</th><th>旧偏移</th>` +
+    `<th>通道</th><th>说明</th></tr></thead><tbody>${noteRows}</tbody></table>` +
+    `<h3>每音独听：后端渲染 PCM 后实测主频，同时核对旧目标与新映射</h3>` +
+    `<table><thead><tr><th>音</th><th>旧目标Hz</th><th>新映射Hz</th>` +
+    `<th>实测Hz</th><th>对旧误差</th><th>对新误差</th><th>核对</th></tr></thead>` +
+    `<tbody>${checks}</tbody></table>` +
+    `<h3>实际通道事件时间线（含释放占用与 pending 补发）</h3>` +
+    `<div class="timeline">${timeline}</div>` +
+    `<h3>切换策略对比：按原音程比保留持续音 vs 安全换气点切换</h3>` +
+    `<p>${cmp.explanation}</p>` +
+    `<table><thead><tr><th>持续音</th><th>hold_freq（保物理频率）</th>` +
+    `<th>hold_ratio（随新映射）</th><th>安全换气点（推迟到无在发音）</th></tr></thead>` +
+    `<tbody>${cmpRows}</tbody></table><p>安全换气点：${safePts}</p>` +
+    `<h3>迁移后谱面（走新映射发声，可直接在③渲染）</h3>` +
+    `<pre>${data.migrated_score_text}</pre>`;
+}
+
+async function runMigration() {
+  let legacyTuning;
+  try {
+    legacyTuning = JSON.parse($("legacy-tuning").value);
+  } catch (err) {
+    showMigrationError(`旧调律 JSON 解析失败：${err.message}`);
+    return;
+  }
+  try {
+    const data = await api("/api/migrate-legacy", {
+      legacy_tuning: legacyTuning,
+      legacy_score_text: $("legacy-score").value,
+      release_seconds: parseFloat($("migrate-release").value),
+    });
+    showMigrationResult(data);
+    // 注册到调律选择器并切换，使琴键/渲染立即使用新实现发声
+    const sel = $("tuning-select");
+    if (![...sel.options].some((o) => o.value === data.registered_name)) {
+      sel.add(new Option(data.registered_name, data.registered_name));
+    }
+    tuningCache[data.registered_name] = data.tuning;
+    await selectTuning(data.registered_name);
+    $("score-text").value = data.migrated_score_text;
+    logKey(`调律资料迁移完成：${data.registered_name}，` +
+      `频率契约${data.frequency_contract_ok ? "通过" : "失败"}`);
+  } catch (err) {
+    showMigrationError(err.message);
+  }
+}
+
+function fillLegacySample(kind) {
+  const s = LEGACY_SAMPLES[kind];
+  $("legacy-tuning").value = s.tuning;
+  $("legacy-score").value = s.score;
+  $("migration-error").classList.add("hidden");
+}
+
 // ---- 初始化 ----------------------------------------------------------------
 
 function init() {
@@ -403,6 +576,11 @@ function init() {
   $("render-score").onclick = renderScore;
   $("export-wav").onclick = exportWav;
   $("render-compare").onclick = renderCompare;
+
+  $("run-migrate").onclick = runMigration;
+  $("load-legacy-sample").onclick = () => fillLegacySample("quarter");
+  $("load-narrow-sample").onclick = () => fillLegacySample("narrow");
+  fillLegacySample("quarter");
 
   // 独立的滑音按钮（放在琴键区底部）
   const glissBtn = document.createElement("button");
